@@ -666,7 +666,14 @@
 
     try {
       const headers = {};
-      if (screenETag) headers["If-None-Match"] = screenETag;
+
+// IMPORTANT: while browsing, we want fresh stock updates; don't allow 304 short-circuit.
+if (currentMode !== "browse" && screenETag) {
+  headers["If-None-Match"] = screenETag;
+} else if (currentMode === "browse") {
+  // Clear it so we don't re-enable 304 on the next tick
+  screenETag = "";
+}
 
       const data = await fetchJSON(`${API_BASE}/kiosk-screen?kiosk_id=${encodeURIComponent(KIOSK_ID)}`, {
         method: "GET",
