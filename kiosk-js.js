@@ -88,74 +88,18 @@
   };
 
   /* ----------------------------
-     SIGMA WARMUP (browse screen)
+     ABORTABLE FETCH (shared helper)
   ---------------------------- */
-  // Calls PI /sigma/warm in the background to let Sigma clear STATUS=20 etc.
-  // Safe because the Pi side uses a SIGMA_LOCK so warm never overlaps purchase.
-  const SIGMA_WARM = {
-    enabled: true,
-    min_interval_ms: 60_000,     // at most once per minute
-    delay_after_browse_ms: 400,  // let UI paint first
-    request_timeout_ms: 7000     // don't hang forever if tunnel is slow
-  };
-
-  let lastSigmaWarmAt = 0;
-  let sigmaWarmInFlight = false;
-
+  // Used by long-running PI calls (e.g. /sigma/purchase) so the UI never hangs forever.
   function abortableFetch(url, opts = {}, timeoutMs = 0) {
     const t = Number(timeoutMs || 0);
     if (!t || !("AbortController" in window)) return fetch(url, opts);
 
     const ac = new AbortController();
     const id = setTimeout(() => ac.abort(), t);
+
     return fetch(url, { ...opts, signal: ac.signal })
       .finally(() => clearTimeout(id));
-  }
-
-  // ✅ supports {force:true} and bypasses buyFlowStarted/throttle when forced
-  async function piSigmaWarm(reason = "", opts = {}) {
-    const force = !!(opts && opts.force);
-
-    if (!SIGMA_WARM.enabled) return;
-    if (!PI_BASE) return;
-
-    // Only block during buy flow if not forced
-    if (buyFlowStarted && !force) return;
-
-    // Don't pile on, unless forced
-    if (sigmaWarmInFlight && !force) return;
-
-    const now = Date.now();
-    if (!force && (now - lastSigmaWarmAt < SIGMA_WARM.min_interval_ms)) return;
-
-    sigmaWarmInFlight = true;
-    lastSigmaWarmAt = now;
-
-    const t0 = performance.now();
-    dbg("SIGMA_WARM: start", { reason, force });
-
-    try {
-      const res = await abortableFetch(`${PI_BASE}/sigma/warm`, {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: "{}"
-      }, SIGMA_WARM.request_timeout_ms);
-
-      let payload = null;
-      try { payload = await res.json(); } catch { payload = null; }
-
-      dbg("SIGMA_WARM: done", {
-        ms: Math.round(performance.now() - t0),
-        ok: !!res.ok,
-        status: res.status,
-        payload
-      });
-    } catch (e) {
-      dbgWarn("SIGMA_WARM: fail", { ms: Math.round(performance.now() - t0), msg: e?.message || String(e) });
-    } finally {
-      sigmaWarmInFlight = false;
-    }
   }
 
   /* ----------------------------
@@ -285,10 +229,6 @@
 
     currentMode = to;
     window.MEADOW_MODE = currentMode;
-
-    if (to === "browse") {
-      setTimeout(() => { piSigmaWarm("entered_browse").catch(() => {}); }, SIGMA_WARM.delay_after_browse_ms);
-    }
 
     schedulePoll(0, "mode_change");
   }
@@ -1059,22 +999,6 @@
   }
 
   /* ----------------------------
-     SIGMA WARM LOOP (only while on browse)
-  ---------------------------- */
-  function startSigmaWarmLoop() {
-    const intervalMs = SIGMA_WARM.min_interval_ms;
-    dbg("SIGMA_WARM: loop started", { interval_ms: intervalMs });
-
-    setInterval(() => {
-      // Only warm while idling on browse; never warm during buy flow unless forced.
-      if (currentMode !== "browse") return;
-      if (buyFlowStarted) return;
-
-      piSigmaWarm("browse_interval").catch(() => {});
-    }, intervalMs);
-  }
-
-  /* ----------------------------
      INIT
   ---------------------------- */
   document.addEventListener("DOMContentLoaded", () => {
@@ -1088,7 +1012,6 @@
     }
 
     startHeartbeat();
-    startSigmaWarmLoop();
 
     // Force clean boot: make sure at least one section is visible.
     currentMode = "__boot__";
