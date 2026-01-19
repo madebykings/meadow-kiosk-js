@@ -16,8 +16,8 @@
   const POLL_MS = {
     ads: 5000,
     browse: 3500,
-    payment: 1500,
-    finalising: 1500,
+    payment: 250,
+    finalising: 250,
     vending: 2500,
     thankyou: 3000,
     error: 2500,
@@ -738,17 +738,20 @@
           (mode === "browse");
 
         const shouldIgnoreBecauseBuyFlow =
-          buyFlowStarted && buyFlowModes.has(mode) && buyFlowModes.has(currentMode);
+  buyFlowStarted && buyFlowModes.has(mode) && buyFlowModes.has(currentMode);
 
-        if (shouldIgnoreBecauseBuyFlow && !isHardOverride) {
-          dbg("poll: ignoring mode flip during buyFlow", { serverMode: mode, currentMode });
-          // keep UI where it is
-        } else {
-          showSection(mode);
-          clearIdle("mode_change:" + mode);
-          if (mode === "ads") AdPlayer.start(); else AdPlayer.stop();
-        }
-      }
+				// ✅ allow payment -> finalising to show
+				const allowFinalisingDuringBuyFlow =
+  				buyFlowStarted && mode === "finalising" && (currentMode === "payment");
+
+				if (shouldIgnoreBecauseBuyFlow && !isHardOverride && !allowFinalisingDuringBuyFlow) {
+  				dbg("poll: ignoring mode flip during buyFlow", { serverMode: mode, currentMode });
+					} else {
+  				showSection(mode);
+  				clearIdle("mode_change:" + mode);
+  				if (mode === "ads") AdPlayer.start(); else AdPlayer.stop();
+				}
+			}
 
       if (mode === "payment" && !buyFlowStarted) {
         const motorToUse = bestMotor();
@@ -795,17 +798,19 @@
   /* ----------------------------
      PI CALLS
   ---------------------------- */
-  async function piSigmaPurchase({ amount_minor, currency_num, reference }) {
+  async function piSigmaPurchase({ amount_minor, currency_num, reference, order_id }) {
     // ✅ Abortable purchase so the UI never hangs forever on tunnel issues.
     const res = await abortableFetch(`${PI_BASE}/sigma/purchase`, {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        amount_minor: Number(amount_minor),
-        currency_num: String(currency_num),
-        reference: String(reference)
-      })
+  			amount_minor: Number(amount_minor),
+  			currency_num: String(currency_num),
+  			reference: String(reference),
+  			order_id: Number(order_id || 0)   // ✅ add this
+			})
+
     }, 220000); // 220s max
 
     let data = null;
