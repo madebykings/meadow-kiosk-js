@@ -47,11 +47,17 @@
   dbg("PI_BASE", PI_BASE);
 
   function startHeartbeat() {
-    // Best-effort; never block UX on heartbeat failures.
-    setInterval(() => {
-      fetch(`${PI_BASE}/heartbeat`, { method: "POST", cache: "no-store" }).catch(() => {});
-    }, 5000);
-  }
+  // UI heartbeat (fast)
+  setInterval(() => {
+    fetch(`${PI_BASE}/heartbeat`, { method: "POST", cache: "no-store" }).catch(() => {});
+  }, 5000);
+
+  // WP heartbeat (slower is fine; kiosk-browser max age is ~180s)
+  setInterval(() => {
+    fetch(`${PI_BASE}/heartbeat/wp`, { method: "POST", cache: "no-store" }).catch(() => {});
+  }, 30000);
+}
+
 
   /* ----------------------------
      SECTION IDS + DEFAULTS
