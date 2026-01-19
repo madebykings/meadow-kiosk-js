@@ -893,13 +893,17 @@ if (currentMode !== "browse" && screenETag) {
       }).catch(() => {});
 
       if (!pay.approved) {
-        await setMode("payment_failed", order_id, { source: "buyFlow(declined)", syncWP: true });
-        resetIdle(DEFAULTS.payment_failed_timeout, "browse", "buyFlow(payment_failed_return)");
-        buyFlowStarted = false;
-        return;
-      }
+  			await setMode("payment_failed", order_id, { source: "buyFlow(declined)", syncWP: true });
+  			resetIdle(DEFAULTS.payment_failed_timeout, "browse", "buyFlow(payment_failed_return)");
+  			buyFlowStarted = false;
+  			return;
+			}
 
-      await setMode("vending", order_id, { source: "buyFlow(vend)", syncWP: true });
+			// approved
+			await setMode("finalising", order_id, { source: "buyFlow(finalising)", syncWP: true });
+			await new Promise(r => setTimeout(r, 400));
+
+			await setMode("vending", order_id, { source: "buyFlow(vend)", syncWP: true });
 
       const vend = await piVend({ motor });
 
