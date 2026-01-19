@@ -17,6 +17,7 @@
     ads: 5000,
     browse: 3500,
     payment: 1500,
+    finalising: 1500,
     vending: 2500,
     thankyou: 3000,
     error: 2500,
@@ -59,6 +60,7 @@
     ads:            "kiosk-ads",
     browse:         "kiosk-browse",
     payment:        "kiosk-payment",
+    finalising:     "kiosk-finalising",
     vending:        "kiosk-vending",
     thankyou:       "kiosk-thankyou",
     error:          "kiosk-error",
@@ -659,7 +661,10 @@
   async function pollScreenState() {
     if (!KIOSK_ID) return;
 
-    if (buyFlowStarted) { dbg("poll ignored (buyFlowStarted)"); return; }
+    if (buyFlowStarted && !["payment", "finalising"].includes(currentMode)) {
+      dbg("poll ignored (buyFlowStarted)", { currentMode });
+      return;
+    }
     if (uiLocked()) { dbg("poll ignored (uiLocked)"); return; }
     if (pollSuppressed()) { dbg("poll ignored (suppressed)"); return; }
     if (["vending"].includes(currentMode)) { dbg("poll suppressed (critical)", { currentMode }); return; }
