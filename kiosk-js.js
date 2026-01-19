@@ -672,13 +672,13 @@
     try {
       const headers = {};
 
-// IMPORTANT: while browsing, we want fresh stock updates; don't allow 304 short-circuit.
-if (currentMode !== "browse" && screenETag) {
-  headers["If-None-Match"] = screenETag;
-} else if (currentMode === "browse") {
-  // Clear it so we don't re-enable 304 on the next tick
-  screenETag = "";
-}
+			// IMPORTANT: while browsing, we want fresh stock updates; don't allow 304 short-circuit.
+      if (currentMode !== "browse" && screenETag) {
+        headers["If-None-Match"] = screenETag;
+      } else if (currentMode === "browse") {
+        // Clear it so we don't re-enable 304 on the next tick
+        screenETag = "";
+      }
 
       const data = await fetchJSON(`${API_BASE}/kiosk-screen?kiosk_id=${encodeURIComponent(KIOSK_ID)}`, {
         method: "GET",
@@ -707,15 +707,41 @@ if (currentMode !== "browse" && screenETag) {
 
       serverOrderId = Number(data.order_id || 0);
 
-      dbg("poll", { serverMode: mode, currentMode, idle_timeout: lastIdleTimeout, thankyou_timeout: lastThankyouTimeout, order_id: serverOrderId, selectedMotor });
+      dbg("poll", {
+        serverMode: mode,
+        currentMode,
+        idle_timeout: lastIdleTimeout,
+        thankyou_timeout: lastThankyouTimeout,
+        order_id: serverOrderId,
+        selectedMotor
+      });
 
       // ✅ apply stock->CTA disable
       try { window.MeadowApplyStockToCTAs?.(data); } catch {}
 
+      // ✅ Prevent "flash back" during buy flow:
+      // If we're already in payment/finalising/vending and WP toggles between them,
+      // ignore the poll-driven UI change and let buyFlow drive the UI.
       if (mode !== currentMode) {
-        showSection(mode);
-        clearIdle("mode_change:" + mode);
-        if (mode === "ads") AdPlayer.start(); else AdPlayer.stop();
+        const buyFlowModes = new Set(["payment", "finalising", "vending"]);
+        const isHardOverride =
+          (mode === "error") ||
+          (mode === "payment_failed") ||
+          (mode === "thankyou") ||
+          (mode === "ads") ||
+          (mode === "browse");
+
+        const shouldIgnoreBecauseBuyFlow =
+          buyFlowStarted && buyFlowModes.has(mode) && buyFlowModes.has(currentMode);
+
+        if (shouldIgnoreBecauseBuyFlow && !isHardOverride) {
+          dbg("poll: ignoring mode flip during buyFlow", { serverMode: mode, currentMode });
+          // keep UI where it is
+        } else {
+          showSection(mode);
+          clearIdle("mode_change:" + mode);
+          if (mode === "ads") AdPlayer.start(); else AdPlayer.stop();
+        }
       }
 
       if (mode === "payment" && !buyFlowStarted) {
@@ -824,55 +850,57 @@ if (currentMode !== "browse" && screenETag) {
     dbg("TIMING: buyFlow start", { motor, kiosk: KIOSK_ID });
 
     try {
-      lockUI(12000, "buyFlow(start->payment)");
-      await setMode("payment", 0, { source: "buyFlow(start)", syncWP: true });
-      dbg("TIMING: after setMode(payment)", { ms: ms(tClick) });
 
-      const tSP = performance.now();
-      const startData = await fetchJSON(`${API_BASE}/start-payment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-        body: new URLSearchParams({
-          kiosk_id: String(KIOSK_ID),
-          motor: String(motor),
-          key: String(API_KEY),
-        }).toString()
-      });
-      dbg("TIMING: start-payment returned", { ms: ms(tSP), total_ms: ms(tClick) });
+      // We DO NOT switch to payment until the terminal purchase is about to start.
+			// That keeps the UI aligned with the terminal prompt.
+			const tSP = performance.now();
+			const startData = await fetchJSON(`${API_BASE}/start-payment`, {
+  			method: "POST",
+  			headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+ 			 	body: new URLSearchParams({
+ 			  kiosk_id: String(KIOSK_ID),
+    			motor: String(motor),
+    			key: String(API_KEY),
+  			}).toString()
+			});
+			dbg("TIMING: start-payment returned", { ms: ms(tSP), total_ms: ms(tClick) });
 
-      unlockUI("start-payment OK");
+			session_id = String(startData.session_id || "");
+			order_id   = Number(startData.order_id || 0);
+			if (!session_id) throw new Error("start-payment returned no session_id");
 
-      session_id = String(startData.session_id || "");
-      order_id   = Number(startData.order_id || 0);
-      if (!session_id) throw new Error("start-payment returned no session_id");
+			const amount_minor = Number(startData.amount_minor);
+			const currency_num = String(startData.currency_num || "826");
+			const reference    = String(startData.reference || "");
 
-      const amount_minor = Number(startData.amount_minor);
-      const currency_num = String(startData.currency_num || "826");
-      const reference    = String(startData.reference || "");
+			// ✅ Now switch to payment right before we talk to Sigma
+			lockUI(12000, "buyFlow(before_sigma)->payment");
+			await setMode("payment", order_id, { source: "buyFlow(before_sigma)", syncWP: true });
+			unlockUI("setMode(payment) before sigma");
 
-      // ---- TIMING: Sigma purchase ----
-      dbg("TIMING: before piSigmaPurchase", { amount_minor, currency_num, reference });
+			// ---- TIMING: Sigma purchase ----
+			dbg("TIMING: before piSigmaPurchase", { amount_minor, currency_num, reference });
 
-      const wait2 = setTimeout(() => dbg("TIMING: still waiting for piSigmaPurchase (2s)"), 2000);
-      const wait5 = setTimeout(() => dbg("TIMING: still waiting for piSigmaPurchase (5s)"), 5000);
-      const wait7 = setTimeout(() => dbg("TIMING: still waiting for piSigmaPurchase (7s)"), 7000);
+			const wait2 = setTimeout(() => dbg("TIMING: still waiting for piSigmaPurchase (2s)"), 2000);
+			const wait5 = setTimeout(() => dbg("TIMING: still waiting for piSigmaPurchase (5s)"), 5000);
+			const wait7 = setTimeout(() => dbg("TIMING: still waiting for piSigmaPurchase (7s)"), 7000);
 
-      const tPi = performance.now();
-      let pay;
-      try {
-        pay = await piSigmaPurchase({ amount_minor, currency_num, reference });
-      } finally {
-        clearTimeout(wait2);
-        clearTimeout(wait5);
-        clearTimeout(wait7);
-      }
+			const tPi = performance.now();
+			let pay;
+			try {
+  			pay = await piSigmaPurchase({ amount_minor, currency_num, reference });
+			} finally {
+  			clearTimeout(wait2);
+  			clearTimeout(wait5);
+  			clearTimeout(wait7);
+			}
 
-      dbg("TIMING: piSigmaPurchase returned", {
-        ms: Math.round(performance.now() - tPi),
-        approved: !!pay?.approved,
-        status: String(pay?.status || ""),
-        stage: String(pay?.stage || "")
-      });
+			dbg("TIMING: piSigmaPurchase returned", {
+  			ms: Math.round(performance.now() - tPi),
+  			approved: !!pay?.approved,
+  			status: String(pay?.status || ""),
+  			stage: String(pay?.stage || "")
+				});
       // ---- /TIMING ----
 
       // report payment result to WP (non-blocking)
@@ -900,9 +928,6 @@ if (currentMode !== "browse" && screenETag) {
 			}
 
 			// approved
-			await setMode("finalising", order_id, { source: "buyFlow(finalising)", syncWP: true });
-			await new Promise(r => setTimeout(r, 400));
-
 			await setMode("vending", order_id, { source: "buyFlow(vend)", syncWP: true });
 
       const vend = await piVend({ motor });
