@@ -312,33 +312,87 @@
     }
 
     function render(ad) {
-      if (!stage) return;
-      stage.innerHTML = "";
+  if (!stage) return;
+  stage.innerHTML = "";
 
-      if (ad.type === "image") {
-        const img = document.createElement("img");
-        img.src = ad.url;
-        img.alt = "";
-        img.style.width = "100%";
-        img.style.height = "100%";
-        img.style.objectFit = "cover";
-        img.style.display = "block";
-        stage.appendChild(img);
-      } else if (ad.type === "video") {
-        const v = document.createElement("video");
-        v.src = ad.url;
-        v.muted = true;
-        v.playsInline = true;
-        v.autoplay = true;
-        v.loop = false;
-        v.preload = "auto";
-        v.style.width = "100%";
-        v.style.height = "100%";
-        v.style.objectFit = "cover";
-        v.style.display = "block";
-        stage.appendChild(v);
+  if (ad.type === "image") {
+    const img = document.createElement("img");
+    img.src = ad.url;
+    img.alt = "";
+    img.decoding = "async";
+    img.loading = "eager";
+    img.style.width = "100%";
+    img.style.height = "100%";
+    img.style.objectFit = "cover";
+    img.style.display = "block";
+    stage.appendChild(img);
+    return;
+  }
+
+  if (ad.type === "video") {
+    const v = document.createElement("video");
+
+    // --- CORE ---
+    v.src = ad.url;
+    v.muted = true;              // REQUIRED for autoplay
+    v.autoplay = true;
+    v.playsInline = true;
+    v.loop = false;
+    v.preload = "auto";
+
+    // --- KIOSK HARDENING ---
+    v.setAttribute("muted", ""); // iOS Safari quirk
+    v.setAttribute("playsinline", "");
+    v.setAttribute("webkit-playsinline", "");
+
+    // --- VISUAL ---
+    v.style.width = "100%";
+    v.style.height = "100%";
+    v.style.objectFit = "cover";
+    v.style.display = "block";
+    v.style.background = "black";
+
+    stage.appendChild(v);
+
+    // --- FORCE AUTOPLAY ---
+    const tryPlay = () => {
+      const p = v.play();
+      if (p && typeof p.catch === "function") {
+        p.catch(() => {});
       }
-    }
+    };
+
+    // Kick once immediately
+    tryPlay();
+
+    // Kick again once metadata is ready (mobile browsers)
+    v.addEventListener("loadedmetadata", tryPlay, { once: true });
+
+    // Kick again once fully buffered enough
+    v.addEventListener("canplay", tryPlay, { once: true });
+
+    // Safety: if video errors, advance
+    v.addEventListener("error", () => {
+      console.warn("[Meadow] Video failed, skipping", ad.url);
+      setTimeout(step, 500);
+    }, { once: true });
+
+    return;
+  }
+}
+
+		function preloadNextVideo() {
+  if (!playlist.length) return;
+
+  const next = playlist[idx % playlist.length];
+  if (!next || next.type !== "video") return;
+
+  const v = document.createElement("video");
+  v.src = next.url;
+  v.muted = true;
+  v.preload = "auto";
+}
+
 
     function step() {
       if (!running) return;
@@ -356,6 +410,8 @@
 
       const dur = Number(ad.duration || 8);
       playTimer = setTimeout(step, Math.max(1, dur) * 1000);
+			
+			 preloadNextVideo();
     }
 
     async function start() {
